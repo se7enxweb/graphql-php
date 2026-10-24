@@ -1,5 +1,5 @@
 {
-  "name":              "ibexa/graphql-php",
+  "name":              "se7enxweb/graphql-php",
   "description":       "A PHP port of GraphQL reference implementation",
   "type":              "library",
   "license":           "MIT",

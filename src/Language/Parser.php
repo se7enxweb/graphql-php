@@ -62,6 +62,14 @@ use function sprintf;
 class Parser
 {
     /**
+     * Default value of the recursionLimit option: the deepest nesting of selection sets, value literals and
+     * type references the parser accepts. 0 disables the limit.
+     *
+     * @api
+     */
+    public const DEFAULT_RECURSION_LIMIT = 256;
+
+    /**
      * Given a GraphQL source, parses it into a `GraphQL\Language\AST\DocumentNode`.
      * Throws `GraphQL\Error\SyntaxError` if a syntax error is encountered.
      *
@@ -101,6 +109,11 @@ class Parser
      *
      *   Note: this feature is experimental and may change or be removed in the
      *   future.)
+     *
+     * recursionLimit: int
+     *   Limits the depth of recursion during parsing, so a deeply nested document
+     *   cannot overflow the stack. The counter is shared by selection sets, value
+     *   literals and type references. Defaults to 256; 0 disables the limit.
      *
      * @param Source|string $source
      * @param bool[]        $options
@@ -178,12 +191,34 @@ class Parser
     /** @var Lexer */
     private $lexer;
 
+    /** @var int */
+    private $recursionDepth = 0;
+
+    /** @var int */
+    private $recursionLimit;
+
     /**
-     * @param bool[] $options
+     * @param bool[]|int[] $options
      */
     public function __construct(Source $source, array $options = [])
     {
-        $this->lexer = new Lexer($source, $options);
+        $this->lexer          = new Lexer($source, $options);
+        $this->recursionLimit = (int) ($options['recursionLimit'] ?? self::DEFAULT_RECURSION_LIMIT);
+    }
+
+    /**
+     * Bounds the nesting depth of selection sets, value literals and type references, so a deeply nested
+     * document is rejected with a syntax error instead of exhausting the PHP stack.
+     *
+     * @throws SyntaxError
+     */
+    private function increaseRecursionDepth()
+    {
+        if ($this->recursionLimit > 0 && $this->recursionDepth >= $this->recursionLimit) {
+            throw new SyntaxError($this->lexer->source, $this->lexer->token->start, sprintf('Recursion depth limit of %d exceeded', $this->recursionLimit));
+        }
+
+        ++$this->recursionDepth;
     }
 
     /**
@@ -566,6 +601,17 @@ class Parser
      */
     private function parseSelectionSet()
     {
+        $this->increaseRecursionDepth();
+
+        try {
+            return $this->doParseSelectionSet();
+        } finally {
+            --$this->recursionDepth;
+        }
+    }
+
+    private function doParseSelectionSet()
+    {
         $start = $this->lexer->token;
 
         return new SelectionSetNode(
@@ -795,6 +841,17 @@ class Parser
      */
     private function parseValueLiteral($isConst)
     {
+        $this->increaseRecursionDepth();
+
+        try {
+            return $this->doParseValueLiteral($isConst);
+        } finally {
+            --$this->recursionDepth;
+        }
+    }
+
+    private function doParseValueLiteral($isConst)
+    {
         $token = $this->lexer->token;
         switch ($token->kind) {
             case Token::BRACKET_L:
@@ -995,6 +1052,17 @@ class Parser
      * @throws SyntaxError
      */
     private function parseTypeReference()
+    {
+        $this->increaseRecursionDepth();
+
+        try {
+            return $this->doParseTypeReference();
+        } finally {
+            --$this->recursionDepth;
+        }
+    }
+
+    private function doParseTypeReference()
     {
         $start = $this->lexer->token;
 

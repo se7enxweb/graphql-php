@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace GraphQL\Tests\Validator;
 
 use GraphQL\Error\FormattedError;
+use GraphQL\Language\Parser;
 use GraphQL\Language\SourceLocation;
 use GraphQL\Type\Definition\InterfaceType;
 use GraphQL\Type\Definition\ObjectType;
 use GraphQL\Type\Definition\Type;
 use GraphQL\Type\Schema;
+use GraphQL\Utils\BuildSchema;
+use GraphQL\Validator\DocumentValidator;
 use GraphQL\Validator\Rules\OverlappingFieldsCanBeMerged;
 
 class OverlappingFieldsCanBeMergedTest extends ValidatorTestCase
@@ -1345,5 +1348,39 @@ class OverlappingFieldsCanBeMergedTest extends ValidatorTestCase
                 ),
             ]
         );
+    }
+
+    public function testManyRepeatedFieldsDoNotCauseQuadraticBlowup() : void
+    {
+        $repeatedFields = str_repeat('name ', 3000);
+        $this->expectPassesRule(
+            new OverlappingFieldsCanBeMerged(),
+            'fragment manyRepeatedFields on Dog { ' . $repeatedFields . ' }'
+        );
+    }
+
+    public function testManyRepeatedFieldsWithConflictStillDetected() : void
+    {
+        $repeatedFields = str_repeat('name ', 100);
+        $query          = 'fragment conflictsAmongMany on Dog { ' . $repeatedFields . ' name: nickname }';
+
+        $errors = DocumentValidator::validate(self::getTestSchema(), Parser::parse($query), [new OverlappingFieldsCanBeMerged()]);
+
+        self::assertNotEmpty($errors);
+        self::assertStringContainsString('name and nickname are different fields', $errors[0]->getMessage());
+    }
+
+    public function testInlineFragmentsDontCauseQuadraticBlowup() : void
+    {
+        $schema = BuildSchema::build('type Query { field: Node }  type Node { f: Node, g: Node, x: String }');
+
+        $innerFragments = implode(' ', array_fill(0, 100, '... on Node { x }'));
+        $outerFragments = implode(' ', array_fill(0, 100, '... on Node { f { ' . $innerFragments . ' } }'));
+        $query          = '{ field { ' . $outerFragments . ' } }';
+
+        $errors = DocumentValidator::validate($schema, Parser::parse($query), [new OverlappingFieldsCanBeMerged()]);
+
+        self::assertNotEmpty($errors);
+        self::assertStringContainsString('Too many field comparisons', $errors[0]->getMessage());
     }
 }
