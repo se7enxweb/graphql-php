@@ -31,10 +31,18 @@ use function array_reduce;
 use function count;
 use function implode;
 use function is_array;
+use function spl_object_hash;
 use function sprintf;
 
 class OverlappingFieldsCanBeMerged extends ValidationRule
 {
+    /**
+     * Default upper bound of field comparisons for one validated document. Inline fragments are flattened into
+     * the parent field map without the fragment pair cache, so a small document can otherwise ask for billions
+     * of comparisons.
+     */
+    public const DEFAULT_MAX_COMPARISON_COUNT = 100000;
+
     /**
      * A memoization for when two fragments are compared "between" each other for
      * conflicts. Two fragments may be compared many times, so memoizing this can
@@ -53,10 +61,22 @@ class OverlappingFieldsCanBeMerged extends ValidationRule
      */
     private $cachedFieldsAndFragmentNames;
 
+    /** @var int */
+    protected $comparisonCount = 0;
+
+    /** @var int */
+    protected $comparisonLimit;
+
+    public function __construct(int $comparisonLimit = self::DEFAULT_MAX_COMPARISON_COUNT)
+    {
+        $this->comparisonLimit = $comparisonLimit;
+    }
+
     public function getVisitor(ValidationContext $context)
     {
         $this->comparedFragmentPairs        = new PairSet();
         $this->cachedFieldsAndFragmentNames = new SplObjectStorage();
+        $this->comparisonCount              = 0;
 
         return [
             NodeKind::SELECTION_SET => function (SelectionSetNode $selectionSet) use ($context) : void {
@@ -308,6 +328,14 @@ class OverlappingFieldsCanBeMerged extends ValidationRule
                 continue;
             }
 
+            // Structurally identical fields can never conflict with each other: compare each of them once,
+            // so a document repeating the same field many times does not cost O(n^2) comparisons.
+            $fields       = $this->deduplicateFields($fields);
+            $fieldsLength = count($fields);
+            if ($fieldsLength <= 1) {
+                continue;
+            }
+
             for ($i = 0; $i < $fieldsLength; $i++) {
                 for ($j = $i + 1; $j < $fieldsLength; $j++) {
                     $conflict = $this->findConflict(
@@ -328,6 +356,46 @@ class OverlappingFieldsCanBeMerged extends ValidationRule
     }
 
     /**
+     * @param mixed[][] $fields
+     *
+     * @return mixed[][]
+     */
+    protected function deduplicateFields(array $fields) : array
+    {
+        $unique = [];
+        $seen   = [];
+        foreach ($fields as $field) {
+            $key = $this->fieldFingerprint($field);
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $unique[]   = $field;
+        }
+
+        return $unique;
+    }
+
+    /**
+     * @param mixed[] $field
+     */
+    protected function fieldFingerprint(array $field) : string
+    {
+        [$parentType, $ast] = $field;
+
+        $parentTypeId   = $parentType !== null ? spl_object_hash($parentType) : '';
+        $selectionSetId = $ast->selectionSet !== null ? spl_object_hash($ast->selectionSet) : '';
+        $fingerprint    = $parentTypeId . ':' . $ast->name->value . ':' . $selectionSetId;
+
+        foreach ($ast->arguments ?? [] as $argument) {
+            $fingerprint .= ':' . $argument->name->value . '=' . Printer::doPrint($argument->value);
+        }
+
+        return $fingerprint;
+    }
+
+    /**
      * Determines if there is a conflict between two particular fields, including
      * comparing their sub-fields.
      *
@@ -345,6 +413,14 @@ class OverlappingFieldsCanBeMerged extends ValidationRule
         array $field1,
         array $field2
     ) {
+        if (++$this->comparisonCount > $this->comparisonLimit) {
+            return [
+                [$responseName, 'Too many field comparisons, query is too complex to validate'],
+                [$field1[1]],
+                [$field2[1]],
+            ];
+        }
+
         [$parentType1, $ast1, $def1] = $field1;
         [$parentType2, $ast2, $def2] = $field2;
 

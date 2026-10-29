@@ -1,5 +1,5 @@
 {
-  "name": "webonyx/graphql-php",
+  "name": "se7enxweb/graphql-php",
   "type": "library",
   "description": "A PHP port of GraphQL reference implementation",
   "keywords": [
@@ -8,6 +8,9 @@
   ],
   "homepage": "https://github.com/webonyx/graphql-php",
   "license": "MIT",
+  "replace": {
+    "webonyx/graphql-php": "self.version"
+  },
   "require": {
     "php": "^7.1 || ^8",
     "ext-json": "*",

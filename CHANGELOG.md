@@ -2,6 +2,13 @@
 
 #### Unreleased
 
+#### 14.11.11
+
+Security fixes backported from 15.31.5 to 15.32.3, published as `se7enxweb/graphql-php` (replaces `webonyx/graphql-php`):
+- The parser bounds the nesting of selection sets, value literals and type references (option `recursionLimit`, default 256, 0 disables); a deeply nested document is a syntax error instead of a stack overflow (GHSA-r7cg-qjjm-xhqq)
+- `OverlappingFieldsCanBeMerged` compares structurally identical fields once (CVE-2026-40476, GHSA-68jq-c3rv-pcrr)
+- `OverlappingFieldsCanBeMerged` stops after 100000 field comparisons per document and reports the document as too complex; the limit is the constructor argument (GHSA-fc86-6rv6-2jpm)
+
 #### 14.11.10
 
 Fixed:
